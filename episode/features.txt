@@ -1,0 +1,25 @@
+CURRENT:
+
+    * Http server for handling user requests and sending responses
+    * Dynamic routing system based on tree structure
+    * Declaring body, path and query parameters in your handler function
+    * Database ORM currently supports only sqlite
+    * Data model
+    * Logging system
+
+
+
+TODOS:
+
+    * Handle large traffic to resolve request blocking
+    * Handle exception and data validations
+
+    * For Episode Template
+        - Template inheritance and inclusion
+        - Custom tags
+        - Automatic escaping
+        - Arguments to filters
+        - Complex conditional logic like else and elif
+        - Loops with more than one loop variable
+        - Whitespace control
+        - Introduce template reconciliation (Only recompile when there are changes to the template)
