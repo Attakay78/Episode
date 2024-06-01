@@ -3,11 +3,12 @@
 from episode.episode import Episode
 from episode.httpresponse import HttpResponse
 from episode.httpstatus import HTTPStatus
-from episode.sqlmodel import Model, Session, select
+from episode.sqlmodel import Model, Session, DBType, DBConnection
 from episode.template_engine import render_template
 
 file_path = "student_db.sqlite"
-
+db_conn = DBConnection.dialect(DBType.SQLITE)
+connection = db_conn(database_path=file_path)
 
 class Student(Model):
     first_name: str
@@ -16,7 +17,7 @@ class Student(Model):
     age: int
 
 
-with Session(file_path) as session:
+with Session(connection) as session:
     session.delete_and_create(Student)
 
 
@@ -26,8 +27,8 @@ if __name__ == "__main__":
     # Expecting a get request only with path parameter 'username'
     @episode.get("/students/{username}")
     def get_student_by_username(request, username: str):
-        with Session(file_path) as session:
-            sql_stmt = select(Student).where(Student.user_name == username)
+        with Session(connection) as session:
+            sql_stmt = session.select(Student).where(Student.user_name == username)
             students = list(session.exec(sql_stmt))
             student = students[0] if students else None
 
@@ -48,8 +49,8 @@ if __name__ == "__main__":
     # Expecting a post request only
     @episode.post("/students/add/")
     def add_student(request, student: Student):
-        with Session(file_path) as session:
-            sql_smt = select(Student).where(Student.user_name == student.user_name)
+        with Session(connection) as session:
+            sql_smt = session.select(Student).where(Student.user_name == student.user_name)
             students = list(session.exec(sql_smt))
 
             if students:
@@ -71,8 +72,6 @@ if __name__ == "__main__":
 
     @episode.get("/index/")
     def get_hello(request):
-        import time
-        # time.sleep(0.01)
         return render_template(
             "index.html", context={"topics": ["Python", "Golang", "Java", "C++"]}
         )

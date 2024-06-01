@@ -1,25 +1,22 @@
 import sqlite3
+from enum import Enum
 from itertools import count
 from typing import List, get_origin, get_args
-from .logger import configure_file_logger, EPISODE_LOGGER
+from logger import configure_file_logger, EPISODE_LOGGER
 import mysql.connector
 from mysql.connector import Error
 
 counter = count()
 
-
+ 
 class Condition:
     def __init__(self, op, field, value):
         self.op = op
         self.field = field
         self.value = value
 
-    def to_sql(self):
-        placeholder = f"var{next(counter)}"
-        return (
-            f"{self.field.name} {self.op} :{placeholder}",
-            {placeholder: self.value},
-        )
+    def to_sql(self, db_strategy):
+        return db_strategy.condition_to_sql(self.field, self.value, self.op)
 
     def __or__(self, other):
         return BoolCondition("OR", self, other)
@@ -34,26 +31,32 @@ class BoolCondition:
         self.cond1 = cond1
         self.cond2 = cond2
 
-    def to_sql(self):
-        sql1, values1 = self.cond1.to_sql()
-        sql2, values2 = self.cond2.to_sql()
+    def to_sql(self, db_strategy):
+        sql1, values1 = self.cond1.to_sql(db_strategy)
+        sql2, values2 = self.cond2.to_sql(db_strategy)
         return (
             f"{sql1} {self.op} {sql2}",
-            {**values1, **values2},
+            db_strategy.concatenate_condition_values(values1, values2)
         )
 
 
 class QueryBuilder:
-    def __init__(self, model):
+    def __init__(self, model, db_strategy):
         self.model = model
+        self.db_strategy = db_strategy
         self._where_condition = False
-        self._values = {}
+        self._values = None
         self._columns = "*"
+        self.row_limit = None
 
     def where(self, condition: Condition):
-        where_sql, values = condition.to_sql()
+        where_sql, values = condition.to_sql(self.db_strategy)
         self._where_condition = f"WHERE {where_sql}"
-        self._values.update(values)
+        self._values = values
+        return self
+    
+    def limit(self, limit):
+        self.row_limit = limit
         return self
     
     def filter_by(self, *args):
@@ -63,12 +66,12 @@ class QueryBuilder:
         return self
     
     def get_sql_stmt(self):
-        return f"SELECT {self._columns} FROM {self.model._name} {self._where_condition}", self._values
+        sql_stmt = f"SELECT {self._columns} FROM {self.model._name} {self._where_condition}"
 
+        if self.row_limit:
+            sql_stmt += f" limit {self.row_limit}"
 
-def select(model):
-    return QueryBuilder(model)
-
+        return sql_stmt, self._values
 
 class Field:
     def __init__(self, name, py_type):
@@ -86,7 +89,7 @@ class Field:
             return self
 
     def __eq__(self, value):
-        return Condition("==", self, value)
+        return Condition("=", self, value)
 
     def __lt__(self, value):
         return Condition("<", self, value)
@@ -102,29 +105,6 @@ class Field:
 
     def __ge__(self, value):
         return Condition(">=", self, value)
-
-    def sql_type(self):
-        python_sql_type = {int: "INTEGER", str: "TEXT"}
-
-        null = " NULL" if self.is_nullable else " NOT NULL"
-        type_args = get_args(self.py_type)
-        type_origin = get_origin(self.py_type)
-
-        if (type_origin is list) and (
-            type_args[0].__base__ is Model
-        ):
-            return "INTEGER" + null  # For one to many relationships
-        
-        if (type_origin is list) and (
-            type_args[0].__base__ is not Model
-        ):
-            return python_sql_type[type_args[0]] + null  # For one to many relationships
-
-        # For one to one relationships
-        if self.py_type.__base__ is Model:
-            return "INTEGER UNIQUE" + null
-
-        return python_sql_type[self.py_type] + null
 
     def to_sql(self, value):
         type_args = get_args(self.py_type)
@@ -178,51 +158,109 @@ class Model:
         return f"<{self.__class__.__name__} {', '.join(stmt)}>"
 
 
-class Session:
-    def __init__(self, path, log=False):
-        self.log = log
-        if self.log:
-            configure_file_logger(filename="episodeDB.log")
-        self.path = path
-        self.conn = sqlite3.connect(self.path)
-        # self.conn.row_factory = sqlite3.Row
+class DBType(Enum):
+    MYSQL = "MYSql"
+    SQLITE = "SQLite"
 
-        self.conn = mysql.connector.connect(host='localhost',
-                                         database='Electronics',
-                                         user='root',
-                                         password='ftpiptf0')
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        self.close()
-
-    def sql_run(self, sql_stmt, values=None):
-        self.log_sql_stmt(f"Running '{sql_stmt}', with, {values}")
-        cur = self.conn.cursor()
-        cur.execute(sql_stmt, values or {})
-        self.conn.commit()
-        return cur.lastrowid
-
+class MySQLConnection:
+    def __init__(self, host: str, database: str, user: str, password: str):
+        self.host = host
+        self.database = database
+        self.user = user
+        self.password = password
+    
+    def connect(self):
+        conn = mysql.connector.connect(host=self.host, database=self.database, user=self.user, password=self.password)
+        return conn
+    
+    def configure_cursor(self, cursor):
+        return cursor(dictionary=True)
+    
+    def delete(self, model: Model):
+        return f"DROP TABLE IF EXISTS {model._name}"
+    
     def create(self, model: Model):
-        create_sql = (
-            f"CREATE TABLE {model._name} (id INTEGER PRIMARY KEY, %s)"
+        return (
+            f"CREATE TABLE {model._name} (id INTEGER AUTO_INCREMENT PRIMARY KEY, %s)"
             % ", ".join(
-                f"{name} {field.sql_type()}" for name, field in model._cols.items() if name != "id"
+                f"{name} {self.sql_type(field)}" for name, field in model._cols.items() if name != "id"
             )
         )
-        return self.sql_run(create_sql)
+    
+    def sql_type(self, field):
+        python_sql_type = {int: "INTEGER", str: "VARCHAR(255)"}
 
+        null = " NULL" if field.is_nullable else " NOT NULL"
+        type_args = get_args(field.py_type)
+        type_origin = get_origin(field.py_type)
+
+        if (type_origin is list) and (
+            type_args[0].__base__ is Model
+        ):
+            return "INTEGER" + null  # For one to many relationships
+        
+        if (type_origin is list) and (
+            type_args[0].__base__ is not Model
+        ):
+            return python_sql_type[type_args[0]] + null  # For one to many relationships
+
+        # For one to one relationships
+        if field.py_type.__base__ is Model:
+            return "INTEGER UNIQUE" + null
+
+        return python_sql_type[field.py_type] + null
+    
+    def save(self, model: Model):
+        values = [
+            field.to_sql(getattr(model, name))
+            for name, field in model._cols.items()
+        ]
+        if model.id:
+            stmt = f"UPDATE {model._name} SET %s " % ", ".join(
+                f"{name} = %s" for name in model._cols
+            )
+
+            stmt += "WHERE id= %s"
+            values.append(model.id)
+            return (stmt, tuple(values))
+        else:
+            insert_sql = f"INSERT INTO {model._name} (%s) VALUES (%s)" % (
+                ", ".join(f"{name}" for name in model._cols),
+                ", ".join(f"%s" for name in model._cols),
+            )
+            return (insert_sql, tuple(values))
+    
+    def condition_to_sql(self, field, value, op):
+        return (f"{field.name} {op} %s", [value])
+    
+    def concatenate_condition_values(self, val1, val2):
+        return tuple([*val1, *val2])
+        
+
+class SQLiteConnection:
+    def __init__(self, database_path):
+        self.database_path = database_path
+    
+    def connect(self):
+        conn = sqlite3.connect(self.database_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+    
+    def configure_cursor(self, cursor):
+        return cursor()
+    
+    def create(self, model: Model):
+        return (
+            f"CREATE TABLE {model._name} (id INTEGER PRIMARY KEY, %s)"
+            % ", ".join(
+                f"{name} {self.sql_type(field)}" for name, field in model._cols.items() if name != "id"
+            )
+        )
+    
     def delete(self, model: Model):
-        delete_sql = f"DROP TABLE IF EXISTS {model._name}"
-        self.sql_run(delete_sql)
-
-    def delete_and_create(self, model: Model):
-        # Delete if table exists and create table after
-        self.delete(model)
-        self.create(model)
-
+        return f"DROP TABLE IF EXISTS {model._name}"
+    
     def save(self, model: Model):
         values = {
             name: field.to_sql(getattr(model, name))
@@ -233,18 +271,102 @@ class Session:
                 f"{name} = :{name}" for name in model._cols
             )
 
-            self.sql_run(stmt, {"id": model.id, **values})
+            return (stmt, {"id": model.id, **values})
         else:
             insert_sql = f"INSERT INTO {model._name} (%s) VALUES (%s)" % (
                 ", ".join(f"{name}" for name in model._cols),
                 ", ".join(f":{name}" for name in model._cols),
             )
-            model.id = self.sql_run(insert_sql, values)
+            return (insert_sql, values)
+    
+    def sql_type(self, field):
+        python_sql_type = {int: "INTEGER", str: "TEXT"}
+
+        null = " NULL" if field.is_nullable else " NOT NULL"
+        type_args = get_args(field.py_type)
+        type_origin = get_origin(field.py_type)
+
+        if (type_origin is list) and (
+            type_args[0].__base__ is Model
+        ):
+            return "INTEGER" + null  # For one to many relationships
+        
+        if (type_origin is list) and (
+            type_args[0].__base__ is not Model
+        ):
+            return python_sql_type[type_args[0]] + null  # For one to many relationships
+
+        # For one to one relationships
+        if field.py_type.__base__ is Model:
+            return "INTEGER UNIQUE" + null
+
+        return python_sql_type[field.py_type] + null
+    
+    def condition_to_sql(self, field, value, op):
+        placeholder = f"var{next(counter)}"
+        return (
+            f"{field.name} {op} :{placeholder}",
+            {placeholder: value},
+        )
+    
+    def concatenate_condition_values(self, val1, val2):
+        return {**val1, **val2}
+
+
+class DBConnection:
+    @staticmethod
+    def dialect(db_type):
+        if db_type == DBType.MYSQL:
+            return MySQLConnection
+        elif db_type == DBType.SQLITE:
+            return SQLiteConnection
+
+
+class Session:
+    def __init__(self, db_strategy, log=False):
+        self.log = log
+        self.db_strategy = db_strategy
+        if self.log:
+            configure_file_logger(filename="episodeDB.log")
+        self.conn = self.db_strategy.connect()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        self.close()
+
+    def sql_run(self, sql_stmt, values=None):
+        self.log_sql_stmt(f"Running '{sql_stmt}', with, {values}")
+        cur = self.db_strategy.configure_cursor(self.conn.cursor)
+        cur.execute(sql_stmt, values or {})
+        self.conn.commit()
+        return cur.lastrowid
+
+    def create(self, model: Model):
+        sql_statement = self.db_strategy.create(model)
+        return self.sql_run(sql_statement)
+
+    def delete(self, model: Model):
+        sql_statement = self.db_strategy.delete(model)
+        self.sql_run(sql_statement)
+
+    def delete_and_create(self, model: Model):
+        # Delete if table exists and create table after
+        self.delete(model)
+        self.create(model)
+
+    def save(self, model: Model):
+        sql_statement, values = self.db_strategy.save(model)
+        row_id = self.sql_run(sql_statement, values)
+
+        if row_id:
+            model.id = row_id
 
     def sql_select(self, sql_stmt, values=None):
         self.log_sql_stmt(f"Selecting '{sql_stmt}' with {values}")
-        cur = self.conn.cursor()
-        cur.execute(sql_stmt, values or {})
+        cur = self.db_strategy.configure_cursor(self.conn.cursor)
+        cur.execute(sql_stmt, values or ())
         yield from cur.fetchall()
     
     def log_sql_stmt(self, sql_stmt):
@@ -278,9 +400,12 @@ class Session:
         for row in self.sql_select(sql_stmt, values):
             row_data = self.process_row_data(row, query_builder)
             yield query_builder.model(**row_data)
-
+ 
     def close(self):
         self.conn.close()
+    
+    def select(self, model):
+        return QueryBuilder(model, connection)
 
 
 if __name__ == "__main__":
@@ -296,9 +421,13 @@ if __name__ == "__main__":
         age: int | None
         department: List[Department]
 
-    file_path = "testdb.sqlite"
+    db_connect = DBConnection.dialect(DBType.SQLITE)
+    connection = db_connect(database_path="testdb.sqlite")
 
-    with Session(file_path, log=True) as session:
+    # db_connect = DBConnection.dialect(DBType.MYSQL)
+    # connection = db_connect(host="localhost", user="root", password="ftpiptf0", database="school_system")
+
+    with Session(connection, log=True) as session:
         session.delete_and_create(Department)
         session.delete_and_create(Student)
 
@@ -308,13 +437,16 @@ if __name__ == "__main__":
         session.save(dp1)
         session.save(dp2)
 
+        dp2.name = "Programming"
+        session.save(dp2)
+
         obed = Student(first_name="obed", last_name="Clon", age=45, department=dp1)
         kwame = Student(first_name="Kwame", last_name="Klan", age=31, department=dp2)
         session.save(obed)
         session.save(kwame)
 
-    with Session(file_path) as session:
-        statement = select(Student).where(Student.department >= 1).filter_by("first_name", "id", "age")
+    with Session(connection, log=True) as session:
+        statement = session.select(Student).where((Student.department == 1) | (Student.department == 2) & (Student.department == 2)).filter_by("first_name", "id", "age").limit(4)
         rows = session.exec(statement)
         for row in rows:
             print(row)
@@ -335,7 +467,7 @@ if __name__ == "__main__":
         students: List[Student]
     
 
-    with Session(file_path) as session:
+    with Session(connection) as session:
         for table in (LectureHall, Student, StudentLectureHall):
             session.delete_and_create(table)
 
@@ -351,29 +483,3 @@ if __name__ == "__main__":
 
         for data in (john, lin, lh1, lh2, slh1, slh2, slh3):
             session.save(data)
-
-
-# import mysql.connector
-# from mysql.connector import Error
-
-# connection = None
-# try:
-#     connection = mysql.connector.connect(host='localhost',
-#                                          database='Electronics',
-#                                          user='root',
-#                                          password='password123')
-#     if connection.is_connected():
-#         db_Info = connection.get_server_info()
-#         print("Connected to MySQL Server version ", db_Info)
-#         cursor = connection.cursor()
-#         cursor.execute("select database();")
-#         record = cursor.fetchone()
-#         print("You're connected to database: ", record)
-
-# except Error as e:
-#     print("Error while connecting to MySQL", e)
-# finally:
-#     if connection and connection.is_connected():
-#         cursor.close()
-#         connection.close()
-#         print("MySQL connection is closed")
