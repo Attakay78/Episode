@@ -2,7 +2,7 @@ import sqlite3
 from enum import Enum
 from itertools import count
 from typing import List, get_origin, get_args
-from logger import configure_file_logger, EPISODE_LOGGER
+from .logger import configure_file_logger, EPISODE_LOGGER
 import mysql.connector
 from mysql.connector import Error
 
