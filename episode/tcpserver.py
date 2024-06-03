@@ -1,7 +1,14 @@
 import socket
 import select
+from enum import Enum
 
 from episode.logger import EPISODE_LOGGER
+
+
+class AppMode(Enum):
+    DEV = "Development"
+    PROD = "Production"
+    TEST = "Testing"
 
 
 class TCPServer:
@@ -10,14 +17,20 @@ class TCPServer:
         self.port = port
         self.connections_fds = []
 
-    def start(self):
+    def start(self, host="127.0.0.1", port=8880, mode=AppMode.DEV):
+        if host:
+            self.host = host
+        if port:
+            self.port = port
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.connections_fds.append(server_socket)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_socket.bind((self.host, self.port))
         server_socket.listen(5)
 
-        EPISODE_LOGGER.info("Listening at {}".format(server_socket.getsockname()))
+        sockhost, sockport = server_socket.getsockname()
+
+        EPISODE_LOGGER.info("Serving at http://{}:{}  (Press CTRL+C to quit)".format(sockhost, sockport))
 
         while True:
             read_fds, _, _ = select.select(self.connections_fds, [], [], 10)
