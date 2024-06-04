@@ -5,7 +5,7 @@ from .template import Oeye
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../"))
 
-from httpresponse import HttpResponse
+from episode.http.httpresponse import HttpResponse
 
 
 __all__ = ["render_template"]

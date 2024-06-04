@@ -1,10 +1,11 @@
 #! /usr/bin/python3
 
 from episode.episode import Episode
-from episode.httpresponse import HttpResponse
-from episode.httpstatus import HTTPStatus
+from episode.http.httpresponse import HttpResponse
+from episode.http.httpstatus import HTTPStatus
 from episode.sqlmodel import Model, Session, DBType, DBConnection
 from episode.template_engine import render_template
+
 
 file_path = "student_db.sqlite"
 db_conn = DBConnection.dialect(DBType.SQLITE)
@@ -65,13 +66,13 @@ if __name__ == "__main__":
             "Data stored successfully", status_code=HTTPStatus.CREATED
         )
 
-    # Expecting path parameter 'id' and a query parameter 'a'
-    @episode.route("/index/{id}/")
-    def get_hello(request, id, a: int):
-        return HttpResponse().write(f"Hello world {id}")
+    # Expecting path parameter 'id' and a query parameter 'q'
+    @episode.route("/data/{id}/")
+    def get_params(request, id, q: int):
+        return HttpResponse().write({"id": id, "query_param": q})
 
     @episode.get("/index/")
-    def get_hello(request):
+    def get_index(request):
         return render_template(
             "index.html", context={"topics": ["Python", "Golang", "Java", "C++"]}
         )

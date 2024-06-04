@@ -4,9 +4,9 @@ import inspect
 import json
 
 from episode.tcpserver import TCPServer
-from episode.httprequest import HTTPRequest
-from episode.httpresponse import HttpResponse
-from episode.httpstatus import HTTPStatus
+from episode.http.httprequest import HTTPRequest
+from episode.http.httpresponse import HttpResponse
+from episode.http.httpstatus import HTTPStatus
 from episode.route import Router
 from episode.sqlmodel import Model
 
