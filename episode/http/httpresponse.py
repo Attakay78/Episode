@@ -1,4 +1,4 @@
-from episode.httpstatus import HTTPStatus
+from episode.http.httpstatus import HTTPStatus
 
 
 class HttpResponse:
