@@ -425,7 +425,7 @@ if __name__ == "__main__":
     connection = db_connect(database_path="testdb.sqlite")
 
     # db_connect = DBConnection.dialect(DBType.MYSQL)
-    # connection = db_connect(host="localhost", user="root", password="ftpiptf0", database="school_system")
+    # connection = db_connect(host="********", user="******", password="******", database="*******")
 
     with Session(connection, log=True) as session:
         session.delete_and_create(Department)

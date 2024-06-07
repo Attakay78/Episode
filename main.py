@@ -1,5 +1,3 @@
-#! /usr/bin/python3
-
 from episode.episode import Episode
 from episode.http.httpresponse import HttpResponse
 from episode.http.httpstatus import HTTPStatus
