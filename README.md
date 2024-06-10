@@ -5,7 +5,7 @@ A python backend framework with rich features, easy to learn and fast to code.
 The Key features are:
 
 * **Fast Router**: Has a fast routing system that speeds up request to response time *
-* **ORM**: Has an inbuilt ORM that supports SQLite and MySQL database *
+* **ORM**: Has an inbuilt ORM that supports SQLite, MySQL and MongoDB database *
 * **Template Engine**: Minimalist integrated template engine for integrating your python code with html *
 * **Fast to code**: Increase the speed to develop features *
 * **Easy**: Designed to be easy to use and learn. Less time reading docs.
