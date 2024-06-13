@@ -12,8 +12,8 @@ connection = db_conn(database_path=file_path)
 class Student(Model):
     first_name: str
     last_name: str
-    user_name: str
-    age: int
+    user_name: str|None
+    age: int|None
 
 
 with Session(connection) as session:
@@ -37,7 +37,7 @@ if __name__ == "__main__":
                     "last_name": student.last_name,
                     "age": student.age,
                 }
-
+                
                 return render_template("student.html", context=context)
             else:
                 return HttpResponse().write(
@@ -45,7 +45,8 @@ if __name__ == "__main__":
                     status_code=HTTPStatus.NOT_FOUND,
                 )
 
-    # Expecting a post request only
+
+    # Expecting a post request only with json request body as Student Model
     @episode.post("/students/add/")
     def add_student(request, student: Student):
         with Session(connection) as session:
@@ -66,7 +67,7 @@ if __name__ == "__main__":
 
     # Expecting path parameter 'id' and a query parameter 'q'
     @episode.route("/data/{id}/")
-    def get_params(request, id, q: int):
+    def get_params(request, id:int, q: int):
         return HttpResponse().write({"id": id, "query_param": q})
 
     @episode.get("/index/")

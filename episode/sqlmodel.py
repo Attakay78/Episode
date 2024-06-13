@@ -1,5 +1,6 @@
 import sqlite3
 import pymongo
+from abc import ABC, abstractmethod
 from enum import Enum
 from itertools import count
 from typing import List, get_origin, get_args
@@ -21,39 +22,35 @@ class Condition:
             return {self.field.name: {self.op: self.value}}
         return db_strategy.condition_to_sql(self.field, self.value, self.op)
 
-    def __or__(self, other):
-        if self.field.is_nosql:
-            return BoolCondition("$or", self, other)
-        
-        return BoolCondition("OR", self, other)
 
-    def __and__(self, other):
-        if self.field.is_nosql:
-            return BoolCondition("$and", self, other)
-        return BoolCondition("AND", self, other)
+class QueryBuilder(ABC):
 
+    @abstractmethod
+    def where(self, condition):
+        pass
 
-class BoolCondition:
-    def __init__(self, op, cond1, cond2):
-        self.op = op
-        self.cond1 = cond1
-        self.cond2 = cond2
+    @abstractmethod
+    def OR(self, operator, condition):
+        pass
 
-    def to_sql(self, is_nosql=False, db_strategy=None):
-        if is_nosql:
-            sql1 = self.cond1.to_sql(is_nosql, db_strategy)
-            sql2 = self.cond2.to_sql(is_nosql, db_strategy)
-            return {self.op : [sql1, sql2]}
-        
-        sql1, values1 = self.cond1.to_sql(db_strategy=db_strategy)
-        sql2, values2 = self.cond2.to_sql(db_strategy=db_strategy)
-        return (
-            f"{sql1} {self.op} {sql2}",
-            db_strategy.concatenate_condition_values(values1, values2)
-        )
+    @abstractmethod
+    def AND(self, operator, condition):
+        pass
+
+    @abstractmethod
+    def filter_by(self, *args):
+        pass
+
+    @abstractmethod
+    def limit(self, limit):
+        pass
+
+    @abstractmethod
+    def get_query_stmt(self):
+        pass
 
 
-class QueryBuilder:
+class SqlQueryBuilder(QueryBuilder):
     def __init__(self, model, db_strategy):
         self.model = model
         self.db_strategy = db_strategy
@@ -68,14 +65,27 @@ class QueryBuilder:
         self._values = values
         return self
     
-    def limit(self, limit):
-        self.row_limit = limit
+    def handle_boolean_condition(self, operator, condition):
+        where_sql, values = condition.to_sql(db_strategy=self.db_strategy)
+        self._where_condition += f" {operator} {where_sql}"
+        self._values = self.db_strategy.concatenate_condition_values(self._values, values)
+    
+    def OR(self, condition: Condition):
+        self.handle_boolean_condition("OR", condition)
+        return self
+    
+    def AND(self, condition: Condition):
+        self.handle_boolean_condition("AND", condition)
         return self
     
     def filter_by(self, *args):
         if len(args) > 0:
             self._columns = ", ".join(args)
         
+        return self
+
+    def limit(self, limit):
+        self.row_limit = limit
         return self
     
     def get_query_stmt(self):
@@ -87,7 +97,7 @@ class QueryBuilder:
         return sql_stmt, self._values
 
 
-class NOSqlQueryBuilder:
+class NOSqlQueryBuilder(QueryBuilder):
     def __init__(self, model):
         self.model = model
         self._where_condition = False
@@ -96,6 +106,18 @@ class NOSqlQueryBuilder:
     
     def where(self, condition: Condition):
         self._where_condition = condition.to_sql(is_nosql=True)
+        return self
+    
+    def handle_boolean_condition(self, operator, condition):
+        where_query = condition.to_sql(is_nosql=True)
+        self._where_condition = {operator: [self._where_condition, where_query]}
+    
+    def OR(self, condition: Condition):
+        self.handle_boolean_condition("$or", condition)
+        return self
+    
+    def AND(self, condition: Condition):
+        self.handle_boolean_condition("$and", condition)
         return self
     
     def filter_by(self, *args):
@@ -261,11 +283,9 @@ class MongoDBConnection:
     
     def process_query(self, query, columns, limit):
         if limit:
-            res = self.table.find(query, columns).limit(limit)
-            return res
+            return self.table.find(query, columns).limit(limit)
         
-        res = self.table.find(query, columns)
-        return res
+        return self.table.find(query, columns)
 
 
 class MySQLConnection:
@@ -443,7 +463,9 @@ class Session:
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        self.close()
+        # self.close()
+        # TODO Resolving releasing db connections to prevent leaking
+        ...
 
     def sql_run(self, sql_stmt, values=None):
         self.log_sql_stmt(f"Running '{sql_stmt}', with, {values}")
@@ -533,7 +555,7 @@ class Session:
     def select(self, model):
         if self.db_strategy.sql_type is SQLType.NOSQL:
             return NOSqlQueryBuilder(model)
-        return QueryBuilder(model, self.db_strategy)
+        return SqlQueryBuilder(model, self.db_strategy)
 
 
 if __name__ == "__main__":
@@ -551,7 +573,7 @@ if __name__ == "__main__":
 
     db_connect = DBConnection.dialect(DBType.SQLITE)
     connection_ = db_connect(database_path="testdb.sqlite")
-
+ 
     # db_connect = DBConnection.dialect(DBType.MONGODB)
     # connection_ = db_connect(database="school_system")
 
@@ -577,7 +599,7 @@ if __name__ == "__main__":
         session.save(kwame)
 
     with Session(connection_, log=True) as session:
-        statement = session.select(Student).where((Student.department == 1) | (Student.department == 2)).filter_by("first_name", "id", "age").limit(4)
+        statement = session.select(Student).where((Student.department == 1)).OR(Student.department == 2).AND((Student.department == 2)).filter_by("first_name", "id", "age").limit(4)
         rows = session.exec(statement)
         for row in rows:
             print(row)
