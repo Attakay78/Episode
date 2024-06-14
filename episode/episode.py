@@ -37,6 +37,9 @@ class Episode(TCPServer):
     def post(self, request_route):
         return self.add_route(request_route, "POST")
 
+    def delete(self, request_route):
+        return self.add_route(request_route, "DELETE")
+
     def validate_request_method(self, request, route_method):
         if (route_method != "all") and (request.method != route_method):
             raise ValueError(
