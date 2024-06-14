@@ -10,7 +10,7 @@ class Node:
         self.value = value
         self.children_nodes = []
         self.children_values = []
-        self.action = None
+        self.actions = []
 
 
 class Router:
@@ -24,7 +24,7 @@ class Router:
             first_route_point = route_points[0]
             if not first_route_point:
                 if handler:
-                    self.root.action = Action(True, handler, accepted_method)
+                    self.root.actions = [Action(True, handler, accepted_method)]
                 return
             if first_route_point not in self.root.children_values:
                 child_node = Node(first_route_point)
@@ -52,7 +52,11 @@ class Router:
                     node.children_values.append(first_route_point)
                     self.add_route(route[1:], handler, child_node, accepted_method)
             else:
-                node.action = Action(True, handler, accepted_method)
+                action = Action(True, handler, accepted_method)
+                if node.actions:
+                    node.actions.append(action)
+                else:
+                    node.actions = [action]
                 return
 
     def print_router(self, node=None):

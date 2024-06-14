@@ -7,7 +7,7 @@ from episode.tcpserver import TCPServer
 from episode.http.httprequest import HTTPRequest
 from episode.http.httpresponse import HttpResponse
 from episode.http.httpstatus import HTTPStatus
-from episode.route import Router
+from episode.route import Router, Action
 from episode.sqlmodel import Model
 
 
@@ -40,12 +40,24 @@ class Episode(TCPServer):
     def delete(self, request_route):
         return self.add_route(request_route, "DELETE")
 
-    def validate_request_method(self, request, route_method):
-        if (route_method != "all") and (request.method != route_method):
-            raise ValueError(
-                f"Expected request method %s but got %s"
-                % (route_method, request.method)
-            )
+    def validate_request_method(self, request, route_methods):
+        accepted_route_action = None
+        # Search from the end, last route takes precedence
+        for action in route_methods[-1::-1]:
+            if action.accepted_method == "all":
+                accepted_route_action = action
+                break
+            elif action.accepted_method == request.method:
+                accepted_route_action = action
+                break
+        
+        if accepted_route_action is None:
+            error_msg = f"<h1>Request method {request.method} is not allowed.<h1>".encode()
+            return HttpResponse().write(
+                error_msg, status_code=HTTPStatus.METHOD_NOT_ALLOWED
+                )
+        
+        return accepted_route_action
 
     def handle_request(self, data):
         # create an instance of `HTTPRequest`
@@ -65,13 +77,16 @@ class Episode(TCPServer):
         # now, look at the router and call the
         # appropriate route handler
         node, route_parameters = self.router.get_route_info(request_uri.rstrip("/"))
-        if node and node.action:
-            if node.action.terminal and node.action.handler:
-                self.validate_request_method(request, node.action.accepted_method)
-                handler = node.action.handler
-                request.route_parameters = route_parameters
+        if node and node.actions:
+            action = self.validate_request_method(request, node.actions)
+            if isinstance(action, Action):
+                if action.terminal and action.handler:
+                    handler = action.handler
+                    request.route_parameters = route_parameters
+                else:
+                    handler = self.HTTP_401_handler
             else:
-                handler = self.HTTP_401_handler
+                return action
         else:
             handler = self.HTTP_401_handler
 
