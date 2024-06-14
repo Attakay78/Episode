@@ -4,7 +4,7 @@ import inspect
 import json
 
 from episode.tcpserver import TCPServer
-from episode.http.httprequest import HTTPRequest
+from episode.http.httprequest import HttpRequest
 from episode.http.httpresponse import HttpResponse
 from episode.http.httpstatus import HTTPStatus
 from episode.route import Router, Action
@@ -60,8 +60,8 @@ class Episode(TCPServer):
         return accepted_route_action
 
     def handle_request(self, data):
-        # create an instance of `HTTPRequest`
-        request = HTTPRequest(data)
+        # create an instance of `HttpRequest`
+        request = HttpRequest(data)
 
         # Extract query parameters if some exist in request uri
         if request.uri.find("?") != -1:

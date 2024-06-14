@@ -1,16 +1,15 @@
-class HTTPRequest:
+class HttpRequest:
     def __init__(self, data):
         self.method = None
         self.uri = None
         self.headers = dict()
         self.body = None
         self.http_version = (
-            "1.1"  # default to HTTP/1.1 if request doesn't provide a version
+            "1.1"
         )
         self.route_parameters = dict()
         self.query_parameters = dict()
 
-        # call self.parse() method to parse the request data
         self.parse(data)
 
     def parse(self, data):
@@ -20,12 +19,10 @@ class HTTPRequest:
 
         words = request_line.split(b" ")
 
-        self.method = words[0].decode()  # call decode to convert bytes to str
+        self.method = words[0].decode()
 
         if len(words) > 1:
-            # we put this in an if-block because sometimes
-            # browsers don't send uri for homepage
-            self.uri = words[1].decode()  # call decode to convert bytes to str
+            self.uri = words[1].decode()
 
         if len(words) > 2:
             self.http_version = words[2]

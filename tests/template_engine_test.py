@@ -1,12 +1,12 @@
 """Tests for Oeye."""
 
+import os
 import re
-from template import Oeye, OeyeSyntaxError
-from unittest import TestCase
+import sys
+import unittest
 
-# pylint: disable=W0612,E1101
-# Disable W0612 (Unused variable) and
-# E1101 (Instance of 'foo' has no 'bar' member)
+sys.path.append(os.path.join(os.path.dirname(__file__), "../"))
+from episode.template_engine.template import Oeye, OeyeSyntaxError
 
 
 class AnyOldObject(object):
@@ -21,7 +21,7 @@ class AnyOldObject(object):
             setattr(self, n, v)
 
 
-class OeyeTest(TestCase):
+class OeyeTest(unittest.TestCase):
     """Tests for Oeye."""
 
     def try_render(self, text, ctx=None, result=None):
