@@ -1,11 +1,11 @@
 from episode.episode import Episode
 from episode.http.httpresponse import HttpResponse
 from episode.http.httpstatus import HTTPStatus
-from episode.sqlmodel import Model, Session, DBType, DBConnection
+from episode.model import Model, Session, DBMS, DBConnection
 from episode.template_engine import render_template
 
 file_path = "student_db.sqlite"
-db_conn = DBConnection.dialect(DBType.SQLITE)
+db_conn = DBConnection.dialect(DBMS.SQLITE)
 connection = db_conn(database_path=file_path)
 
 
@@ -17,7 +17,7 @@ class Student(Model):
 
 
 with Session(connection) as session:
-    session.delete_and_create(Student)
+    session.drop_create(Student)
 
 if __name__ == "__main__":
     episode = Episode()

@@ -8,7 +8,7 @@ from episode.http.httprequest import HttpRequest
 from episode.http.httpresponse import HttpResponse
 from episode.http.httpstatus import HTTPStatus
 from episode.route import Router, Action
-from episode.sqlmodel import Model
+from episode.model import Model
 
 
 class Episode(TCPServer):
