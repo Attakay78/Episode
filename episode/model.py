@@ -1,3 +1,4 @@
+import copy
 import sqlite3
 import pymongo
 from abc import ABC, abstractmethod
@@ -17,10 +18,10 @@ class Condition:
         self.field = field
         self.value = value
 
-    def to_sql(self, is_nosql=False, db_strategy=None):
+    def to_sql(self, is_nosql=False, dbms=None):
         if is_nosql:
             return {self.field.name: {self.op: self.value}}
-        return db_strategy.condition_to_sql(self.field, self.value, self.op)
+        return dbms.condition_to_sql(self.field, self.value, self.op)
 
 
 class QueryBuilder(ABC):
@@ -51,24 +52,24 @@ class QueryBuilder(ABC):
 
 
 class SqlQueryBuilder(QueryBuilder):
-    def __init__(self, model, db_strategy):
+    def __init__(self, model, dbms):
         self.model = model
-        self.db_strategy = db_strategy
-        self._where_condition = False
+        self.dbms = dbms
+        self._where_condition = None
         self._values = None
         self._columns = "*"
         self.row_limit = None
 
     def where(self, condition: Condition):
-        where_sql, values = condition.to_sql(db_strategy=self.db_strategy)
+        where_sql, values = condition.to_sql(dbms=self.dbms)
         self._where_condition = f"WHERE {where_sql}"
         self._values = values
         return self
     
     def handle_boolean_condition(self, operator, condition):
-        where_sql, values = condition.to_sql(db_strategy=self.db_strategy)
+        where_sql, values = condition.to_sql(dbms=self.dbms)
         self._where_condition += f" {operator} {where_sql}"
-        self._values = self.db_strategy.concatenate_condition_values(self._values, values)
+        self._values = self.dbms.concatenate_condition_values(self._values, values)
     
     def OR(self, condition: Condition):
         self.handle_boolean_condition("OR", condition)
@@ -89,7 +90,10 @@ class SqlQueryBuilder(QueryBuilder):
         return self
     
     def get_query_stmt(self):
-        sql_stmt = f"SELECT {self._columns} FROM {self.model._name} {self._where_condition}"
+        sql_stmt = f"SELECT {self._columns} FROM {self.model._name}"
+
+        if self._where_condition:
+            sql_stmt += f" {self._where_condition}"
 
         if self.row_limit:
             sql_stmt += f" limit {self.row_limit}"
@@ -100,7 +104,7 @@ class SqlQueryBuilder(QueryBuilder):
 class NOSqlQueryBuilder(QueryBuilder):
     def __init__(self, model):
         self.model = model
-        self._where_condition = False
+        self._where_condition = None
         self._columns = {}
         self.row_limit = None
     
@@ -142,6 +146,20 @@ class Field:
         self.is_nosql = False
 
     def __set__(self, instance, value):
+        type_args = get_args(self.py_type)
+        type_origin = get_origin(self.py_type)
+        if type_args and type_origin:
+            if type(value) != type_args[0] and value != None:
+                msg: str = (
+                    f"Expected type of value {value} is `{type_args[0]}` but got `{type(value)}`."
+                )
+                raise Exception(msg)
+        elif type(value) != self.py_type and value != None:
+            msg: str = (
+                f"Expected type of value {value} is `{self.py_type}` but got `{type(value)}`."
+            )
+            raise Exception(msg)
+        
         instance._values[self.name] = value
 
     def __get__(self, instance, cls):
@@ -230,15 +248,28 @@ class Model:
     def __repr__(self):
         stmt = (f"{name}={getattr(self, name)}" for name in self._cols if name in self._values and self._values[name] is not None)
         return f"<{self.__class__.__name__} {', '.join(stmt)}>"
+    
+    def to_dict(self):
+        return self.jsonify_model(copy.deepcopy(self._values))
+    
+    def jsonify_model(self, dict_obj):
+        new_dict = {}
+        dict_obj.pop("id")
+        for key, value in dict_obj.items():
+            if isinstance(value, Model):
+                new_dict[key] = self.jsonify_model(copy.deepcopy(value._values))
+            else:
+                new_dict[key] = value
+        return new_dict
 
 
-class DBType(Enum):
+class DBMS(Enum):
     MYSQL = "MYSql"
     SQLITE = "SQLite"
     MONGODB = "MongoDB"
 
 
-class SQLType(Enum):
+class DBType(Enum):
     SQL = "sql"
     NOSQL = "nosql"
 
@@ -249,8 +280,8 @@ class MongoDBConnection:
         self.port = port
         self.database_name = database
         self.database = None
-        self.table = None
-        self.sql_type = SQLType.NOSQL
+        self.collection = None
+        self.db_type = DBType.NOSQL
     
     def connect(self):
         conn = pymongo.MongoClient(f"mongodb://{self.host}:{self.port}/")
@@ -260,10 +291,14 @@ class MongoDBConnection:
     def create(self, model: Model):
         return self.database[model._name]
     
-    def delete(self, model: Model):
+    def drop(self, model: Model):
         collist = self.database.list_collection_names()
         if model._name in collist:
             self.database[model._name].delete_many({})
+    
+    def delete(self, model: Model):
+        query = {"_id": model.id}
+        self.database[model._name].delete_one(query)
     
     def save(self, model: Model):
         values = {}
@@ -277,15 +312,15 @@ class MongoDBConnection:
             query = { "_id": model.id }
             newvalues = { "$set": values }
 
-            self.table.update_one(query, newvalues)
+            self.collection.update_one(query, newvalues)
         else:
-            model.id = self.table.insert_one(values).inserted_id
+            model.id = self.collection.insert_one(values).inserted_id
     
     def process_query(self, query, columns, limit):
         if limit:
-            return self.table.find(query, columns).limit(limit)
+            return self.collection.find(query, columns).limit(limit)
         
-        return self.table.find(query, columns)
+        return self.collection.find(query, columns)
 
 
 class MySQLConnection:
@@ -294,7 +329,7 @@ class MySQLConnection:
         self.database = database
         self.user = user
         self.password = password
-        self.sql_type = SQLType.SQL
+        self.db_type = DBType.SQL
     
     def connect(self):
         conn = mysql.connector.connect(host=self.host, database=self.database, user=self.user, password=self.password)
@@ -303,8 +338,11 @@ class MySQLConnection:
     def configure_cursor(self, cursor):
         return cursor(dictionary=True)
     
-    def delete(self, model: Model):
+    def drop(self, model: Model):
         return f"DROP TABLE IF EXISTS {model._name}"
+    
+    def delete(self, model: Model):
+        return f"DELETE FROM {model._name} WHERE id = %s", (model.id,)
     
     def create(self, model: Model):
         return (
@@ -367,7 +405,7 @@ class MySQLConnection:
 class SQLiteConnection:
     def __init__(self, database_path):
         self.database_path = database_path
-        self.sql_type = SQLType.SQL
+        self.db_type = DBType.SQL
     
     def connect(self):
         conn = sqlite3.connect(self.database_path)
@@ -385,8 +423,11 @@ class SQLiteConnection:
             )
         )
     
-    def delete(self, model: Model):
+    def drop(self, model: Model):
         return f"DROP TABLE IF EXISTS {model._name}"
+    
+    def delete(self, model: Model):
+        return f"DELETE FROM {model._name} WHERE id=:id", {"id": model.id}
     
     def save(self, model: Model):
         values = {
@@ -442,62 +483,72 @@ class SQLiteConnection:
 
 class DBConnection:
     @staticmethod
-    def dialect(db_type):
-        if db_type == DBType.MYSQL:
+    def dialect(dbms):
+        if dbms == DBMS.MYSQL:
             return MySQLConnection
-        elif db_type == DBType.SQLITE:
+        elif dbms == DBMS.SQLITE:
             return SQLiteConnection
-        elif db_type == DBType.MONGODB:
+        elif dbms == DBMS.MONGODB:
             return MongoDBConnection
 
 
 class Session:
-    def __init__(self, db_strategy, log=False):
+    def __init__(self, dbms, log=False):
         self.log = log
-        self.db_strategy = db_strategy
+        self.dbms = dbms
         if self.log:
             configure_file_logger(filename="episodeDB.log")
-        self.conn = self.db_strategy.connect()
+        self.conn = self.dbms.connect()
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
         # self.close()
-        # TODO Resolving releasing db connections to prevent leaking
+        # TODO Resolve releasing db connections to prevent leaking
         ...
 
     def sql_run(self, sql_stmt, values=None):
         self.log_sql_stmt(f"Running '{sql_stmt}', with, {values}")
-        cur = self.db_strategy.configure_cursor(self.conn.cursor)
+        cur = self.dbms.configure_cursor(self.conn.cursor)
         cur.execute(sql_stmt, values or {})
         self.conn.commit()
         return cur.lastrowid
 
     def create(self, model: Model):
-        if self.db_strategy.sql_type is SQLType.NOSQL:
-            self.db_strategy.table = self.db_strategy.create(model)
+        if self.dbms.db_type is DBType.NOSQL:
+            self.dbms.collection = self.dbms.create(model)
         else:
-            sql_statement = self.db_strategy.create(model)
+            sql_statement = self.dbms.create(model)
             return self.sql_run(sql_statement)
 
-    def delete(self, model: Model):
-        if self.db_strategy.sql_type is SQLType.NOSQL:
-            self.db_strategy.delete(model)
+    def drop(self, model: Model):
+        if self.dbms.db_type is DBType.NOSQL:
+            self.dbms.drop(model)
         else:
-            sql_statement = self.db_strategy.delete(model)
+            sql_statement = self.dbms.drop(model)
             self.sql_run(sql_statement)
 
-    def delete_and_create(self, model: Model):
-        # Delete if table exists and create table after
-        self.delete(model)
+    def drop_create(self, model: Model):
+        # Drop if table exists and create table after
+        self.drop(model)
         self.create(model)
+    
+    def delete(self, model: Model):
+        if self.dbms.db_type is DBType.NOSQL:
+            self.dbms.delete(model)
+        else:
+            sql_statement, values = self.dbms.delete(model)
+            self.sql_run(sql_statement, values)
+
+        if model.id:
+            model.id = None
 
     def save(self, model: Model):
-        if self.db_strategy.sql_type is SQLType.NOSQL:
-            self.db_strategy.save(model)
+        if self.dbms.db_type is DBType.NOSQL:
+            self.dbms.save(model)
         else:
-            sql_statement, values = self.db_strategy.save(model)
+            sql_statement, values = self.dbms.save(model)
             row_id = self.sql_run(sql_statement, values)
 
             if row_id:
@@ -505,7 +556,7 @@ class Session:
 
     def sql_select(self, sql_stmt, values=None):
         self.log_sql_stmt(f"Selecting '{sql_stmt}' with {values}")
-        cur = self.db_strategy.configure_cursor(self.conn.cursor)
+        cur = self.dbms.configure_cursor(self.conn.cursor)
         cur.execute(sql_stmt, values or ())
         yield from cur.fetchall()
     
@@ -516,7 +567,10 @@ class Session:
     def process_row_data(self, row, query_builder: QueryBuilder):
         row_data = {}
         for name, value in dict(row).items():
-            sql_stmt = f"SELECT * FROM {name} WHERE id = :id"
+            if isinstance(self.dbms, MySQLConnection):
+                sql_stmt, values = f"SELECT * FROM {name} WHERE id = %s", (value,)
+            else:
+                sql_stmt, values = f"SELECT * FROM {name} WHERE id=:id", {"id": value}
             column = query_builder.model._cols.get(name, None)
             if (
                 column != None
@@ -524,11 +578,11 @@ class Session:
                 and (issubclass(get_args(column.py_type)[0], Model))
             ):
                 row_data[name] = get_args(column.py_type)[0](
-                    **dict(next(self.sql_select(sql_stmt, {"id": value})))
+                    **dict(next(self.sql_select(sql_stmt, values)))
                 )
             elif column != None and column.py_type.__base__ is Model:
                 row_data[name] = column.py_type(
-                    **dict(next(self.sql_select(sql_stmt, {"id": value})))
+                    **dict(next(self.sql_select(sql_stmt, values)))
                 )
             else:
                 row_data[name] = value
@@ -536,9 +590,9 @@ class Session:
         return row_data
 
     def exec(self, query_builder):
-        if self.db_strategy.sql_type is SQLType.NOSQL:
+        if self.dbms.db_type is DBType.NOSQL:
             query, cols, limit = query_builder.get_query_stmt()
-            for row_data in self.db_strategy.process_query(query, cols, limit):
+            for row_data in self.dbms.process_query(query, cols, limit):
                 if "_id" in row_data.keys():
                     row_data["id"] = row_data["_id"]
                     row_data.pop("_id")
@@ -553,9 +607,9 @@ class Session:
         self.conn.close()
     
     def select(self, model):
-        if self.db_strategy.sql_type is SQLType.NOSQL:
+        if self.dbms.db_type is DBType.NOSQL:
             return NOSqlQueryBuilder(model)
-        return SqlQueryBuilder(model, self.db_strategy)
+        return SqlQueryBuilder(model, self.dbms)
 
 
 if __name__ == "__main__":
@@ -571,18 +625,18 @@ if __name__ == "__main__":
         age: int | None
         department: List[Department]
 
-    db_connect = DBConnection.dialect(DBType.SQLITE)
-    connection_ = db_connect(database_path="testdb.sqlite")
+    # db_connect = DBConnection.dialect(DBMS.SQLITE)
+    # connection_ = db_connect(database_path="testdb.sqlite")
  
-    # db_connect = DBConnection.dialect(DBType.MONGODB)
-    # connection_ = db_connect(database="school_system")
+    db_connect = DBConnection.dialect(DBMS.MONGODB)
+    connection_ = db_connect(database="school_system")
 
-    # db_connect = DBConnection.dialect(DBType.MYSQL)
+    # db_connect = DBConnection.dialect(DBMS.MYSQL)
     # connection_ = db_connect(host="localhost", user="root", password="ftpiptf0", database="school_system")
-
+ 
     with Session(connection_, log=True) as session:
-        session.delete_and_create(Department)
-        session.delete_and_create(Student)
+        session.drop_create(Department)
+        session.drop_create(Student)
 
         dp1 = Department(name="Science", employees_number=2900, courses=20)
         dp2 = Department(name="Art", employees_number=2100, courses=10)
@@ -599,8 +653,9 @@ if __name__ == "__main__":
         session.save(kwame)
 
     with Session(connection_, log=True) as session:
-        statement = session.select(Student).where((Student.department == 1)).OR(Student.department == 2).AND((Student.department == 2)).filter_by("first_name", "id", "age").limit(4)
-        rows = session.exec(statement)
+        query_statement = session.select(Student).where((Student.department == 1)).OR(Student.department == 2).AND((Student.department == 2)).filter_by("first_name", "id", "age").limit(4)
+
+        rows = session.exec(query_statement)
         for row in rows:
             print(row)
     
@@ -622,7 +677,7 @@ if __name__ == "__main__":
 
     # with Session(connection_) as session:
     #     for table in (LectureHall, Student, StudentLectureHall):
-    #         session.delete_and_create(table)
+    #         session.drop_create(table)
 
     #     john = Student(first_name="John", last_name="Doe", age=34)
     #     lin = Student(first_name="Lin", last_name="Hally", age=35)
