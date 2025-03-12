@@ -12,8 +12,8 @@ connection = db_conn(database_path=file_path)
 class Student(Model):
     first_name: str
     last_name: str
-    user_name: str | None
-    age: int | None
+    user_name: str
+    age: int
 
 
 with Session(connection) as session:

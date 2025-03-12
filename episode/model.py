@@ -4,10 +4,9 @@ import pymongo
 from abc import ABC, abstractmethod
 from enum import Enum
 from itertools import count
-from typing import List, get_origin, get_args
+from typing import get_origin, get_args
 from .logger import configure_file_logger, EPISODE_LOGGER
 import mysql.connector
-from mysql.connector import Error
 
 counter = count()
 
@@ -149,12 +148,12 @@ class Field:
         type_args = get_args(self.py_type)
         type_origin = get_origin(self.py_type)
         if type_args and type_origin:
-            if type(value) != type_args[0] and value != None:
+            if type(value) is not type_args[0] and value is not None:
                 msg: str = (
                     f"Expected type of value {value} is `{type_args[0]}` but got `{type(value)}`."
                 )
                 raise Exception(msg)
-        elif type(value) != self.py_type and value != None:
+        elif type(value) is not self.py_type and value is not None:
             msg: str = (
                 f"Expected type of value {value} is `{self.py_type}` but got `{type(value)}`."
             )
@@ -213,6 +212,10 @@ class Field:
 
 
 class Model:
+    def __new__(mcs, *args, **kwargs):
+        cls = super().__new__(mcs)
+        return cls
+    
     def __init_subclass__(cls):
         cls._name = cls.__name__.lower()
         cls._cols = {
@@ -235,7 +238,6 @@ class Model:
                 
                 if type_args[0].__base__ is not Model:
                     field.py_type = type_args[0]
-                        
 
     def __init__(self, **kwargs):
         self._values = {}
@@ -573,14 +575,14 @@ class Session:
                 sql_stmt, values = f"SELECT * FROM {name} WHERE id=:id", {"id": value}
             column = query_builder.model._cols.get(name, None)
             if (
-                column != None
+                column is not None
                 and (get_origin(column.py_type) is list)
                 and (issubclass(get_args(column.py_type)[0], Model))
             ):
                 row_data[name] = get_args(column.py_type)[0](
                     **dict(next(self.sql_select(sql_stmt, values)))
                 )
-            elif column != None and column.py_type.__base__ is Model:
+            elif column is not None and column.py_type.__base__ is Model:
                 row_data[name] = column.py_type(
                     **dict(next(self.sql_select(sql_stmt, values)))
                 )
@@ -610,84 +612,3 @@ class Session:
         if self.dbms.db_type is DBType.NOSQL:
             return NOSqlQueryBuilder(model)
         return SqlQueryBuilder(model, self.dbms)
-
-
-if __name__ == "__main__":
-    #  Example
-    class Department(Model):
-        name: str
-        employees_number: int
-        courses: int
-
-    class Student(Model):
-        first_name: str
-        last_name: str
-        age: int | None
-        department: List[Department]
-
-    # db_connect = DBConnection.dialect(DBMS.SQLITE)
-    # connection_ = db_connect(database_path="testdb.sqlite")
- 
-    db_connect = DBConnection.dialect(DBMS.MONGODB)
-    connection_ = db_connect(database="school_system")
-
-    # db_connect = DBConnection.dialect(DBMS.MYSQL)
-    # connection_ = db_connect(host="localhost", user="root", password="ftpiptf0", database="school_system")
- 
-    with Session(connection_, log=True) as session:
-        session.drop_create(Department)
-        session.drop_create(Student)
-
-        dp1 = Department(name="Science", employees_number=2900, courses=20)
-        dp2 = Department(name="Art", employees_number=2100, courses=10)
-
-        session.save(dp1)
-        session.save(dp2)
-
-        dp2.name = "Programming"
-        session.save(dp2)
-
-        obed = Student(first_name="obed", last_name="Clon", age=45, department=dp1)
-        kwame = Student(first_name="Kwame", last_name="Klan", age=31, department=dp2)
-        session.save(obed)
-        session.save(kwame)
-
-    with Session(connection_, log=True) as session:
-        query_statement = session.select(Student).where((Student.department == 1)).OR(Student.department == 2).AND((Student.department == 2)).filter_by("first_name", "id", "age").limit(4)
-
-        rows = session.exec(query_statement)
-        for row in rows:
-            print(row)
-    
-
-    # class LectureHall(Model):
-    #     name: str
-    #     capacity: int
-    #     location: str
-    
-    # class Student(Model):
-    #     first_name: str
-    #     last_name: str
-    #     age: int
-    
-    # class StudentLectureHall(Model):
-    #     lecture_halls: List[LectureHall]
-    #     students: List[Student]
-    
-
-    # with Session(connection_) as session:
-    #     for table in (LectureHall, Student, StudentLectureHall):
-    #         session.drop_create(table)
-
-    #     john = Student(first_name="John", last_name="Doe", age=34)
-    #     lin = Student(first_name="Lin", last_name="Hally", age=35)
-
-    #     lh1 = LectureHall(name="LH1", capacity=2300, location="Angel street")
-    #     lh2 = LectureHall(name="LH2", capacity=4500, location="Cornor point")
-
-    #     slh1 = StudentLectureHall(students=john, lecture_halls=lh1)
-    #     slh2 = StudentLectureHall(students=john, lecture_halls=lh2)
-    #     slh3 = StudentLectureHall(students=lin, lecture_halls=lh2)
-
-    #     for data in (john, lin, lh1, lh2, slh1, slh2, slh3):
-    #         session.save(data)

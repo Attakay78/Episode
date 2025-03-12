@@ -1,0 +1,7 @@
+annotated-types==0.7.0
+dnspython==2.6.1
+mysql-connector-python==8.4.0
+pydantic==2.8.2
+pydantic-core==2.20.1
+pymongo==4.7.3
+typing-extensions==4.12.2

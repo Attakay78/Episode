@@ -1,5 +1,3 @@
-import os
-import mimetypes
 import inspect
 import json
 
@@ -113,9 +111,9 @@ class Episode(TCPServer):
                     # Match param data type
                     # Now only consider int and string
                     try:
-                        if param_obj.annotation == int:
+                        if param_obj.annotation is int:
                             handler_params[param_name] = int(route_parameter_value)
-                        elif param_obj.annotation == str:
+                        elif param_obj.annotation is str:
                             handler_params[param_name] = str(route_parameter_value)
                     except Exception:
                         # Param data type mismatch
